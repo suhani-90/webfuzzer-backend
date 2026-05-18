@@ -1,0 +1,109 @@
+version: "3.9"
+
+services:
+  # ── FastAPI Backend ──────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://smartfuzz:smartfuzz_pass@postgres:5432/smartfuzz_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../reports:/app/reports
+    restart: unless-stopped
+    networks:
+      - smartfuzz-net
+
+  # ── Celery Worker ─────────────────────────────────────────────────────────────
+  celery-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: >
+      celery -A app.core.celery_app worker
+      --loglevel=info
+      --queues=fuzzing,crawling
+      --concurrency=4
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://smartfuzz:smartfuzz_pass@postgres:5432/smartfuzz_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    networks:
+      - smartfuzz-net
+
+  # ── Celery Flower (monitoring UI) ─────────────────────────────────────────────
+  flower:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: celery -A app.core.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - smartfuzz-net
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: smartfuzz
+      POSTGRES_PASSWORD: smartfuzz_pass
+      POSTGRES_DB: smartfuzz_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartfuzz -d smartfuzz_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - smartfuzz-net
+
+  # ── Redis ──────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    command: redis-server --appendonly yes
+    networks:
+      - smartfuzz-net
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  smartfuzz-net:
+    driver: bridge
