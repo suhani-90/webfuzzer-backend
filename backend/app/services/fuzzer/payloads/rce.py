@@ -1,3 +1,5 @@
+# pragma: allowlist secret
+
 """
 app/services/fuzzer/payloads/rce.py
 ─────────────────────────────────────
